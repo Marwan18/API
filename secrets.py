@@ -1,68 +1,73 @@
+"""Generate cryptographically strong pseudo-random numbers suitable for
+managing secrets such as account authentication, tokens, and similar.
+
+See PEP 506 for more information.
+https://www.python.org/dev/peps/pep-0506/
+
 """
-Copyright (C) 2009-2021 Splunk Inc. All Rights Reserved.
 
-REST endpoint handler for fetching public and private keys necessary for signing cloud gateway messages
-"""
-
-import sys
-import json
-from splunk.persistconn.application import PersistentServerConnectionApplication
-from splunk.clilib.bundle_paths import make_splunkhome_path
-sys.path.append(make_splunkhome_path(['etc', 'apps', 'splunk_secure_gateway', 'bin']))
-
-from spacebridgeapp.util import py23
-
-from spacebridgeapp.logging import setup_logging
-from spacebridgeapp.util import constants
-from spacebridgeapp.rest.base_endpoint import BaseRestHandler
-from spacebridgeapp.rest.services import splunk_service
-from spacebridgeapp.util.constants import MTLS_KEY, MTLS_CERT
-
-LOGGER = setup_logging(constants.SPACEBRIDGE_APP_NAME + ".log", "secrets_handler")
+__all__ = ['choice', 'randbelow', 'randbits', 'SystemRandom',
+           'token_bytes', 'token_hex', 'token_urlsafe',
+           'compare_digest',
+           ]
 
 
-_ALLOWED_SECRETS = [MTLS_KEY, MTLS_CERT]
+import base64
+import binascii
+import os
 
+from hmac import compare_digest
+from random import SystemRandom
 
-class SecretsStore(BaseRestHandler, PersistentServerConnectionApplication):
+_sysrand = SystemRandom()
 
-    def __init__(self, command_line, command_arg):
-        BaseRestHandler.__init__(self)
+randbits = _sysrand.getrandbits
+choice = _sysrand.choice
 
-    def post(self, request):
-        """
-        Fetch public and private keys for signing messages from the passwords endpoint
-        :param request:
-        :return:
-        """
-        LOGGER.info('Received request for storing secrets %s', request)
-        user_token = request['session']['authtoken']
-        secret_name = request['path_info']
-        secret_value = request['payload']
+def randbelow(exclusive_upper_bound):
+    """Return a random int in the range [0, n)."""
+    if exclusive_upper_bound <= 0:
+        raise ValueError("Upper bound must be positive.")
+    return _sysrand._randbelow(exclusive_upper_bound)
 
-        if secret_name not in _ALLOWED_SECRETS:
-            return _error(400, 'invalid secret_name, not in allowed values')
+DEFAULT_ENTROPY = 32  # number of bytes to return by default
 
-        LOGGER.info('Received request for storing secrets %s %s', user_token, secret_name)
-        return _store_secret(user_token, secret_name, secret_value)
+def token_bytes(nbytes=None):
+    """Return a random byte string containing *nbytes* bytes.
 
+    If *nbytes* is ``None`` or not supplied, a reasonable
+    default is used.
 
-def _error(status_code, message):
-    return {
-        'payload': {
-            'result': 'error',
-            'error': message
-        },
-        'status': status_code
-    }
+    >>> token_bytes(16)  #doctest:+SKIP
+    b'\\xebr\\x17D*t\\xae\\xd4\\xe3S\\xb6\\xe2\\xebP1\\x8b'
 
+    """
+    if nbytes is None:
+        nbytes = DEFAULT_ENTROPY
+    return os.urandom(nbytes)
 
-def _store_secret(user_authtoken, secret_name, secret_value):
-    splunk_service.update_or_create_sensitive_data(user_authtoken, secret_name, secret_value)
+def token_hex(nbytes=None):
+    """Return a random text string, in hexadecimal.
 
-    return {
-        'payload': {
-            'result': 'ok'
-        },
-        'status': 200,
-    }
+    The string has *nbytes* random bytes, each byte converted to two
+    hex digits.  If *nbytes* is ``None`` or not supplied, a reasonable
+    default is used.
+
+    >>> token_hex(16)  #doctest:+SKIP
+    'f9bf78b9a18ce6d46a0cd2b0b86df9da'
+
+    """
+    return binascii.hexlify(token_bytes(nbytes)).decode('ascii')
+
+def token_urlsafe(nbytes=None):
+    """Return a random URL-safe text string, in Base64 encoding.
+
+    The string has *nbytes* random bytes.  If *nbytes* is ``None``
+    or not supplied, a reasonable default is used.
+
+    >>> token_urlsafe(16)  #doctest:+SKIP
+    'Drmhze6EPcv0fN_81Bj-nA'
+
+    """
+    tok = token_bytes(nbytes)
+    return base64.urlsafe_b64encode(tok).rstrip(b'=').decode('ascii')
